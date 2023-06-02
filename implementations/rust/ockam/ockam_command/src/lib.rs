@@ -306,8 +306,8 @@ pub fn run() {
 
             command.run();
         }
-        Err(help) => show_help(&help.render()),
-    }
+        Err(help) => show_help(help)
+    };
 }
 
 impl OckamCommand {
@@ -451,8 +451,15 @@ pub(crate) fn replace_hyphen_with_stdin(s: String) -> String {
     }
 }
 
-fn show_help(contents: &StyledStr) {
-    paginate(contents).unwrap_or_else(|_| println!("{}", contents));
+const EXIT_OK: i32 = 0;
+const EXIT_USAGE: i32 = 2;
+
+fn show_help(help: clap::Error) {
+    paginate(&help.render()).unwrap_or_else(|_| help.print().unwrap());
+
+    let _ = std::io::stdout().lock().flush();
+    let _ = std::io::stderr().lock().flush();
+    process::exit(if help.use_stderr() { EXIT_USAGE } else { EXIT_OK });
 }
 
 fn paginate(text: &StyledStr) -> Result<()> {
