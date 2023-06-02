@@ -52,7 +52,7 @@ use crate::run::RunCommand;
 use crate::subscription::SubscriptionCommand;
 use crate::terminal::{Terminal, TerminalStream};
 use authenticated::AuthenticatedCommand;
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum, builder::StyledStr};
+use clap::{builder::StyledStr, ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 use colorful::Colorful;
 use completion::CompletionCommand;
@@ -299,14 +299,13 @@ pub fn run() {
 
     match OckamCommand::try_parse_from(input) {
         Ok(command) => {
-
             if !command.global_args.test_argument_parser {
                 check_if_an_upgrade_is_available();
             }
 
             command.run();
         }
-        Err(help) => show_help(help)
+        Err(help) => show_help(help),
     };
 }
 
@@ -459,27 +458,39 @@ fn show_help(help: clap::Error) {
 
     let _ = std::io::stdout().lock().flush();
     let _ = std::io::stderr().lock().flush();
-    process::exit(if help.use_stderr() { EXIT_USAGE } else { EXIT_OK });
+    process::exit(if help.use_stderr() {
+        EXIT_USAGE
+    } else {
+        EXIT_OK
+    });
 }
 
 fn paginate(text: &StyledStr) -> Result<()> {
     let mut try_fallback = false;
-    let preferred_pager = std::env::var("PAGER")
-        .unwrap_or_else(|_| { try_fallback = true; "less".to_string() });
+    let preferred_pager = std::env::var("PAGER").unwrap_or_else(|_| {
+        try_fallback = true;
+        "less".to_string()
+    });
 
     if let Err(e) = paginate_with(preferred_pager.borrow(), &text) {
-        if try_fallback { paginate_with("more", &text) } else { Err(e) }
+        if try_fallback {
+            paginate_with("more", &text)
+        } else {
+            Err(e)
+        }
     } else {
         Ok(())
     }
 }
 
-
 fn paginate_with(pager: &str, text: &StyledStr) -> Result<()> {
     let mut invocation = process::Command::new(pager);
 
-    if Path::new(pager).file_name()
-            .map_or("", |s| s.to_str().unwrap_or("")) == "less" {
+    if Path::new(pager)
+        .file_name()
+        .map_or("", |s| s.to_str().unwrap_or(""))
+        == "less"
+    {
         invocation.env("LESS", "-F");
         // - no pagination if the text fits entirely into the window
         // - using env var in case a lesser `less` poses as `less`
