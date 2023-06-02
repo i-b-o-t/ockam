@@ -52,7 +52,7 @@ use crate::run::RunCommand;
 use crate::subscription::SubscriptionCommand;
 use crate::terminal::{Terminal, TerminalStream};
 use authenticated::AuthenticatedCommand;
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum, builder::StyledStr};
 
 use colorful::Colorful;
 use completion::CompletionCommand;
@@ -80,8 +80,7 @@ use secure_channel::{listener::SecureChannelListenerCommand, SecureChannelComman
 use service::ServiceCommand;
 use space::SpaceCommand;
 use status::StatusCommand;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::{borrow::Borrow, io::Write, path::PathBuf, process, sync::Mutex};
 use tcp::{
     connection::TcpConnectionCommand, inlet::TcpInletCommand, listener::TcpListenerCommand,
     outlet::TcpOutletCommand,
@@ -298,13 +297,17 @@ pub fn run() {
         .map(replace_hyphen_with_stdin)
         .collect::<Vec<_>>();
 
-    let command = OckamCommand::parse_from(input);
+    match OckamCommand::try_parse_from(input) {
+        Ok(command) => {
 
-    if !command.global_args.test_argument_parser {
-        check_if_an_upgrade_is_available();
+            if !command.global_args.test_argument_parser {
+                check_if_an_upgrade_is_available();
+            }
+
+            command.run();
+        }
+        Err(help) => show_help(&help.render()),
     }
-
-    command.run();
 }
 
 impl OckamCommand {
@@ -446,4 +449,43 @@ pub(crate) fn replace_hyphen_with_stdin(s: String) -> String {
     } else {
         s
     }
+}
+
+fn show_help(contents: &StyledStr) {
+    paginate(contents).unwrap_or_else(|_| println!("{}", contents));
+}
+
+fn paginate(text: &StyledStr) -> Result<()> {
+    let mut try_fallback = false;
+    let preferred_pager = std::env::var("PAGER")
+        .unwrap_or_else(|_| { try_fallback = true; "less".to_string() });
+
+    if let Err(e) = paginate_with(preferred_pager.borrow(), &text) {
+        if try_fallback { paginate_with("more", &text) } else { Err(e) }
+    } else {
+        Ok(())
+    }
+}
+
+
+fn paginate_with(pager: &str, text: &StyledStr) -> Result<()> {
+    let mut invocation = process::Command::new(pager);
+
+    if pager == "less" {
+        invocation.env("LESS", "-F");
+        // - no pagination if the text fits entirely into the window
+        // - using env var in case a lesser `less` poses as `less`
+    }
+
+    let mut child = invocation.stdin(process::Stdio::piped()).spawn()?;
+
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write(format!("{}", text).as_bytes())?;
+        // subtle: implied `drop(stdin)` at end of scope hands over
+        // input stream and control over the pager to the user
+    }
+
+    child.wait()?;
+    Ok(())
 }
