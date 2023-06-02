@@ -80,7 +80,7 @@ use secure_channel::{listener::SecureChannelListenerCommand, SecureChannelComman
 use service::ServiceCommand;
 use space::SpaceCommand;
 use status::StatusCommand;
-use std::{borrow::Borrow, io::Write, path::PathBuf, process, sync::Mutex};
+use std::{borrow::Borrow, io::Write, path::Path, path::PathBuf, process, sync::Mutex};
 use tcp::{
     connection::TcpConnectionCommand, inlet::TcpInletCommand, listener::TcpListenerCommand,
     outlet::TcpOutletCommand,
@@ -471,7 +471,8 @@ fn paginate(text: &StyledStr) -> Result<()> {
 fn paginate_with(pager: &str, text: &StyledStr) -> Result<()> {
     let mut invocation = process::Command::new(pager);
 
-    if pager == "less" {
+    if Path::new(pager).file_name()
+            .map_or("", |s| s.to_str().unwrap_or("")) == "less" {
         invocation.env("LESS", "-F");
         // - no pagination if the text fits entirely into the window
         // - using env var in case a lesser `less` poses as `less`
