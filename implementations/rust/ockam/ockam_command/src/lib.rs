@@ -472,9 +472,9 @@ fn paginate(text: &StyledStr) -> Result<()> {
         "less".to_string()
     });
 
-    if let Err(e) = paginate_with(preferred_pager.borrow(), &text) {
+    if let Err(e) = paginate_with(preferred_pager.borrow(), text) {
         if try_fallback {
-            paginate_with("more", &text)
+            paginate_with("more", text)
         } else {
             Err(e)
         }
@@ -500,7 +500,7 @@ fn paginate_with(pager: &str, text: &StyledStr) -> Result<()> {
 
     {
         let mut stdin = child.stdin.take().unwrap();
-        stdin.write(format!("{}", text).as_bytes())?;
+        stdin.write_all(format!("{}", text).as_bytes())?;
         // subtle: implied `drop(stdin)` at end of scope hands over
         // input stream and control over the pager to the user
     }
