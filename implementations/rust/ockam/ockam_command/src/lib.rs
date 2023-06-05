@@ -52,7 +52,7 @@ use crate::run::RunCommand;
 use crate::subscription::SubscriptionCommand;
 use crate::terminal::{Terminal, TerminalStream};
 use authenticated::AuthenticatedCommand;
-use clap::{builder::StyledStr, ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 use colorful::Colorful;
 use completion::CompletionCommand;
@@ -80,7 +80,7 @@ use secure_channel::{listener::SecureChannelListenerCommand, SecureChannelComman
 use service::ServiceCommand;
 use space::SpaceCommand;
 use status::StatusCommand;
-use std::{ffi::OsString, io::Write, path::Path, path::PathBuf, process, sync::Mutex};
+use std::{ffi::OsString, path::Path, path::PathBuf, process, process::Stdio, sync::Mutex};
 use tcp::{
     connection::TcpConnectionCommand, inlet::TcpInletCommand, listener::TcpListenerCommand,
     outlet::TcpOutletCommand,
@@ -111,7 +111,8 @@ after_long_help = docs::after_help(AFTER_LONG_HELP),
 version,
 long_version = Version::long(),
 next_help_heading = "Global Options",
-disable_help_flag = true
+disable_help_flag = true,
+color = clap::ColorChoice::Always,
 )]
 pub struct OckamCommand {
     #[command(subcommand)]
@@ -450,61 +451,60 @@ pub(crate) fn replace_hyphen_with_stdin(s: String) -> String {
     }
 }
 
-const EXIT_OK: i32 = 0;
-const EXIT_USAGE: i32 = 2;
-
 fn show_help(help: clap::Error) {
-    paginate(&help.render()).unwrap_or_else(|_| help.print().unwrap());
-
-    let _ = std::io::stdout().lock().flush();
-    let _ = std::io::stderr().lock().flush();
-    process::exit(if help.use_stderr() {
-        EXIT_USAGE
-    } else {
-        EXIT_OK
-    });
-}
-
-fn paginate(text: &StyledStr) -> Result<()> {
     let mut try_fallback = false;
     let preferred_pager = std::env::var_os("PAGER").unwrap_or_else(|| {
         try_fallback = true;
         OsString::from("less")
     });
-
-    if let Err(e) = paginate_with(preferred_pager, text) {
-        if try_fallback {
-            paginate_with(OsString::from("more"), text)
-        } else {
-            Err(e)
-        }
-    } else {
-        Ok(())
+    if let Ok(()) = paginate_with(preferred_pager, &help) {
+        return;
     }
+    if try_fallback {
+        if let Ok(()) = paginate_with(OsString::from("more"), &help) {
+            return;
+        }
+    }
+    paginate_with(OsString::from("false"), &help)
+        .expect("displaying help without pagination should always work");
 }
 
-fn paginate_with(pager: OsString, text: &StyledStr) -> Result<()> {
-    let mut invocation = process::Command::new(&pager);
-
-    if Path::new(&pager)
+fn paginate_with(pager: OsString, help: &clap::Error) -> Result<()> {
+    let mut pager_invocation = process::Command::new(&pager);
+    match Path::new(&pager)
         .file_name()
         .map_or("", |s| s.to_str().unwrap_or(""))
-        == "less"
     {
-        invocation.env("LESS", "-F");
-        // - no pagination if the text fits entirely into the window
-        // - using env var in case a lesser `less` poses as `less`
+        "false" => {
+            help.exit();
+        }
+        "less" => {
+            pager_invocation.env("LESS", "FRX");
+            // - F: no pagination if the text fits entirely into the window
+            // - R: allow ANSI escapes output formatting
+            // - X: prevents clearing the screen on exit
+            // - using env var in case a lesser `less` poses as `less`
+        }
+        _ => {}
     }
+    let mut pager_process = pager_invocation.stdin(Stdio::piped()).spawn()?;
+    let pipe = Stdio::from(pager_process.stdin.take().expect("stdin open?"));
 
-    let mut child = invocation.stdin(process::Stdio::piped()).spawn()?;
+    let exit_status = {
+        let mut my_args = std::env::args_os();
+        let my_exe_name = my_args.next().unwrap_or("ockam".into());
 
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(format!("{}", text).as_bytes())?;
-        // subtle: implied `drop(stdin)` at end of scope hands over
-        // input stream and control over the pager to the user
-    }
+        let mut rerun = process::Command::new(my_exe_name);
+        rerun.args(my_args).env("PAGER", "false");
+        if help.use_stderr() {
+            rerun.stderr(pipe);
+        } else {
+            rerun.stdout(pipe);
+        }
+        rerun.status()?.code().unwrap_or(exitcode::SOFTWARE)
+        // dropping owned pipe hands over pager control to the user
+    };
 
-    child.wait()?;
-    Ok(())
+    pager_process.wait()?;
+    process::exit(exit_status);
 }
