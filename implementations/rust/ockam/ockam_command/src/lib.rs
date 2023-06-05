@@ -80,7 +80,7 @@ use secure_channel::{listener::SecureChannelListenerCommand, SecureChannelComman
 use service::ServiceCommand;
 use space::SpaceCommand;
 use status::StatusCommand;
-use std::{borrow::Borrow, io::Write, path::Path, path::PathBuf, process, sync::Mutex};
+use std::{ffi::OsString, io::Write, path::Path, path::PathBuf, process, sync::Mutex};
 use tcp::{
     connection::TcpConnectionCommand, inlet::TcpInletCommand, listener::TcpListenerCommand,
     outlet::TcpOutletCommand,
@@ -467,14 +467,14 @@ fn show_help(help: clap::Error) {
 
 fn paginate(text: &StyledStr) -> Result<()> {
     let mut try_fallback = false;
-    let preferred_pager = std::env::var("PAGER").unwrap_or_else(|_| {
+    let preferred_pager = std::env::var_os("PAGER").unwrap_or_else(|| {
         try_fallback = true;
-        "less".to_string()
+        OsString::from("less")
     });
 
-    if let Err(e) = paginate_with(preferred_pager.borrow(), text) {
+    if let Err(e) = paginate_with(preferred_pager, text) {
         if try_fallback {
-            paginate_with("more", text)
+            paginate_with(OsString::from("more"), text)
         } else {
             Err(e)
         }
@@ -483,10 +483,10 @@ fn paginate(text: &StyledStr) -> Result<()> {
     }
 }
 
-fn paginate_with(pager: &str, text: &StyledStr) -> Result<()> {
-    let mut invocation = process::Command::new(pager);
+fn paginate_with(pager: OsString, text: &StyledStr) -> Result<()> {
+    let mut invocation = process::Command::new(&pager);
 
-    if Path::new(pager)
+    if Path::new(&pager)
         .file_name()
         .map_or("", |s| s.to_str().unwrap_or(""))
         == "less"
