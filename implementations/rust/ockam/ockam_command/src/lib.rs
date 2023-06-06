@@ -112,7 +112,6 @@ version,
 long_version = Version::long(),
 next_help_heading = "Global Options",
 disable_help_flag = true,
-color = clap::ColorChoice::Always,
 )]
 pub struct OckamCommand {
     #[command(subcommand)]
@@ -451,12 +450,28 @@ pub(crate) fn replace_hyphen_with_stdin(s: String) -> String {
     }
 }
 
+const ENV_FORCE_COLOR: &str = "ockam_force_color";
+
 fn show_help(help: clap::Error) {
+    use std::env;
     let mut try_fallback = false;
-    let preferred_pager = std::env::var_os("PAGER").unwrap_or_else(|| {
+    let preferred_pager = env::var_os("PAGER").unwrap_or_else(|| {
         try_fallback = true;
         OsString::from("less")
     });
+
+    if preferred_pager == "false" {
+        use clap::{ColorChoice::*, CommandFactory};
+        let possibly_forced = if env::var_os(ENV_FORCE_COLOR).is_some() {
+            Always
+        } else {
+            Auto
+        };
+
+        help.with_cmd(&OckamCommand::command().color(possibly_forced))
+            .exit();
+    }
+
     if let Ok(()) = paginate_with(preferred_pager, &help) {
         return;
     }
@@ -471,21 +486,16 @@ fn show_help(help: clap::Error) {
 
 fn paginate_with(pager: OsString, help: &clap::Error) -> Result<()> {
     let mut pager_invocation = process::Command::new(&pager);
-    match Path::new(&pager)
+    if Path::new(&pager)
         .file_name()
         .map_or("", |s| s.to_str().unwrap_or(""))
+        == "less"
     {
-        "false" => {
-            help.exit();
-        }
-        "less" => {
-            pager_invocation.env("LESS", "FRX");
-            // - F: no pagination if the text fits entirely into the window
-            // - R: allow ANSI escapes output formatting
-            // - X: prevents clearing the screen on exit
-            // - using env var in case a lesser `less` poses as `less`
-        }
-        _ => {}
+        pager_invocation.env("LESS", "FRX");
+        // - F: no pagination if the text fits entirely into the window
+        // - R: allow ANSI escapes output formatting
+        // - X: prevents clearing the screen on exit
+        // - using env var in case a lesser `less` poses as `less`
     }
     let mut pager_process = pager_invocation.stdin(Stdio::piped()).spawn()?;
     let pipe = Stdio::from(pager_process.stdin.take().expect("stdin open?"));
@@ -496,10 +506,16 @@ fn paginate_with(pager: OsString, help: &clap::Error) -> Result<()> {
 
         let mut rerun = process::Command::new(my_exe_name);
         rerun.args(my_args).env("PAGER", "false");
-        if help.use_stderr() {
+        use atty::Stream::*;
+        let output_stream = if help.use_stderr() {
             rerun.stderr(pipe);
+            Stderr
         } else {
             rerun.stdout(pipe);
+            Stdout
+        };
+        if atty::is(output_stream) {
+            rerun.env(ENV_FORCE_COLOR, "_");
         }
         rerun.status()?.code().unwrap_or(exitcode::SOFTWARE)
         // dropping owned pipe hands over pager control to the user
